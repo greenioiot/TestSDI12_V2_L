@@ -117,6 +117,7 @@ signal meta ;
 //BluetoothSerial SerialBT;
 /** Define the SDI-12 bus */
 SDI12 mySDI12(DATA_PIN);
+WebServer server(80);
 
 String sdiResponse = "";
 String myCommand   = "";
@@ -330,7 +331,26 @@ void setup() {
   _init();
   initSD();
 
-
+  /* Put your SSID & Password */
+  const char* ssid = "SDI12";  // Enter SSID here
+  const char* password = "12345678";  //Enter Password here
+  
+  
+  if (WiFi.status() != WL_CONNECTED) {
+    /* Put IP Address details */
+    IPAddress local_ip(192,168,1,1);
+    IPAddress gateway(192,168,1,1);
+    IPAddress subnet(255,255,255,0);
+    
+    WiFi.softAP(ssid, password);
+    WiFi.softAPConfig(local_ip, gateway, subnet);
+  }
+  server.on("/", handle_file);
+  server.on("/get", handle_get);
+  server.onNotFound(handle_NotFound);
+  server.begin();
+  Serial.println("HTTP server started");
+  Serial.println(WiFi.localIP());
 
   getepoch();
   tft.fillScreen(TFT_BLACK);
@@ -372,9 +392,62 @@ void setup() {
 
 }
 
+void handle_file() {
+  Serial.println("Hello");
+  File dir = SD.open("/");
+  String htmlStr = "<!DOCTYPE html> <html>\n";
+  htmlStr += "<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, user-scalable=no\">\n";
+  htmlStr += "<title>File System</title>\n";
+  htmlStr += "</head>\n";
+  htmlStr += "<body>\n";
+  htmlStr += "<h1>File System</h1>\n";
+  while (true) {
+    File entry = dir.openNextFile();
+    if (! entry) {
+      break;
+    }
+    if (entry.isDirectory()) {
+    } else {
+      htmlStr += "<a href=\"/get?file=";
+      //htmlStr += "<a href=\"/file";
+      htmlStr += entry.name();
+      htmlStr += "\">";
+      htmlStr += entry.name();
+      htmlStr += "</a><br/>\n";
+    }
+    Serial.println(entry.name());
+    entry.close();
+  }
+  htmlStr +="</body>\n";
+  htmlStr +="</html>\n";
+  server.send(200, "text/html", htmlStr);
+}
+void handle_get() {
+  String fileBytes = "";
+  String fileType = "";
+  File dataFile = SD.open(server.arg("file"));
+  if (dataFile) {
+    while (dataFile.available()) {
+      fileBytes += (char)dataFile.read();
+    }
+    dataFile.close();
+  }
+  if (server.arg("file").endsWith(".csv")) fileType = "text/csv";
+  else if (server.arg("file").endsWith(".jpeg") || server.arg("file").endsWith(".jpg")) fileType = "image/jpeg";
+  else fileType = "application/octet-stream";
+  server.sendHeader("Content-Disposition", "attachment");
+  server.arg("file").remove(0);
+  server.sendHeader("filename", server.arg("file"));
+  server.send(200, fileType, fileBytes);
+}
+void handle_NotFound(){
+  server.send(404, "text/plain", "Not found");
+}
+
 void loop() {
   runner.execute();
   ArduinoOTA.handle();
+  server.handleClient();
 
 
 
@@ -399,6 +472,7 @@ void t2CallgetVoltLevel() {
 
 void t3CallgetRain() {
   //  checkRainGate();
+  drawSpriteRain();
 }
 
 void getModel() {
@@ -949,6 +1023,7 @@ void appendSD(unsigned long nowTime) {
   Data.toCharArray(csvData, Data.length() + 1);
   Serial.println(Data);
   appendFile(SD, ("/data_" + a0(month(nowTime)) + "_" + String(year(nowTime)) + ".csv").c_str(), csvData);
+  lastSend = epoch + ((millis() - epoch_mill) / 1000) + (7 * 3600);
 
 }
 
@@ -1233,13 +1308,18 @@ void t4CallsendViaNBIOT()
   json.concat(meta.csq);
   json.concat("}");
   Serial.println(json);
+  Serial.print("MIN:");
+  Serial.println(minute(nowTime));
   //  SerialBT.println(json);
   if (readModbusStatus) {
-    UDPSend udp = AISnb.sendUDPmsgStr(serverIP, serverPort, json);
-    UDPReceive resp = AISnb.waitResponse();
-    Serial.print("rssi:");
-    Serial.println(meta.rssi);
-    rainCount = 0;
+    if ((minute(nowTime)) % 15 == 0 ) {
+      UDPSend udp = AISnb.sendUDPmsgStr(serverIP, serverPort, json);
+      UDPReceive resp = AISnb.waitResponse();
+      Serial.print("rssi:");
+      Serial.println(meta.rssi);
+      rainCount = 0;
+      appendSD(nowTime);
+    }
   } else {
     Serial.println("cannot read Modbus");
   }
@@ -1287,7 +1367,7 @@ void readMeter()
     Serial.print("meter.area:"); Serial.println( meter.area);
     Serial.print("meter.volt:"); Serial.println( meter.volt);  //Voltage Unbalance L-N Worst
 
-    appendSD(nowTime);
+    
   }
   Serial.println("readMeter.done");
 }
